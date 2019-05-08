@@ -232,7 +232,7 @@ def create_verbose_data(data, target_layers):
     for k in data.keys():
         d = data[k]
 
-        if is_target_layer(d["layer"], target_layers):
+        if target_layers is None or is_target_layer(d["layer"], target_layers):
             result[k] = d
 
     return result
@@ -245,7 +245,7 @@ def show_result(data, show_all, target_layers):
         show_no_data(target_layers)
         return
     
-    if not show_all:
+    if not show_all and target_layers is not None:
         layers = ",".join(target_layers)    
         print("===== Package in layer %s ====" % layers)
     else:
@@ -271,15 +271,13 @@ def show_licence_dir_error(path):
     exit(1)
     
 def parse_arguments():
-    parser = OptionParser()
-
-    parser.add_option("-d", "--license-directory", dest="license_directory",
-                      help="path to license directory. for checking rootfs, this path point to image directory. e.g. deploy/licenses/core-image-minimal-qemuarm64-20190423064724",
-                      metavar="LicenseDirectory")
+    usage = "usage: %prog [options] licence_directory"
+    
+    parser = OptionParser(usage=usage)
 
     parser.add_option("-l", "--layers", dest="layer_names",
                       help="comma separeted layer names",
-                      metavar="layers", default="")
+                      metavar="layers", default=None)
     
     parser.add_option("-v", "--version", dest="version",
                       help="show program version",
@@ -295,15 +293,17 @@ def parse_arguments():
 
     (options, args) = parser.parse_args()
 
-    args = {
-        "license_directory": options.license_directory,
+    if len(args) == 0:
+        print("must specify license directory", file=sys.stderr)
+        exit(1)
+    
+    return {
+        "license_directory": args[0],
         "version": options.version,
         "all": options.all_info,
         "layer_names": options.layer_names,
         "rootfs": options.rootfs,
     }
-
-    return args
 
 if __name__ == "__main__":
     args = parse_arguments()
@@ -317,9 +317,13 @@ if __name__ == "__main__":
     has_bitbake()
     layers = get_layers()
     recipes = get_recipes()
-    check_target_layers = args["layer_names"].split(',')
+
+    check_target_layers = None
+    if args["layer_names"]:
+        check_target_layers = args["layer_names"].split(',')
+        
     licenses = None
-    
+
     if args["rootfs"]:
         licenses = read_license_manifest(args["license_directory"])
     else:
