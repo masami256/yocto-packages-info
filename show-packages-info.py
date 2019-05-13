@@ -5,7 +5,19 @@ from optparse import OptionParser
 from stat import *
 import sys
 import os
+import atexit
 
+RECIPE_DEPNDS_FILE = "./recipe-depends.dot"
+
+def remove_packages_not_in_manifest(packages, target_packages):
+    result = {}
+    
+    for pkgname in packages:
+        if pkgname in target_packages:
+            result[pkgname] = packages[pkgname]
+    
+    return result
+    
 def run_cmd(cmd):
     lines = []
     
@@ -22,7 +34,64 @@ def run_cmd(cmd):
         }
     return None
 
-def find_packages_not_built_from_debian(packages, licenses, base_workdir):
+def create_dependencies_files(target, sdkflag):
+    # bitbake -g core-image-minimal -c populate_sdk
+
+    cmd = [ "bitbake", "-g", target ]
+    if sdkflag:
+        cmd = cmd + [ "-c", "populate_sdk" ]
+
+    result =run_cmd(cmd)
+
+    return os.path.exists(RECIPE_DEPNDS_FILE)
+
+def parse_info_line(line):
+    arr = line.split(' ')
+
+    pkgname = arr[0].replace('"', '').strip()
+    
+    tmp = arr[1].strip().split('\\n')
+    path = tmp[-1]
+    
+    if ":" in path:
+        path = path.split(":")[-1]
+        
+    path = path.replace(']', '').replace('"', '')
+        
+    version = tmp[1].strip(':')
+        
+    return {
+        "pkgname": pkgname,
+        "bbpath": path,
+        "version": version,
+    }
+        
+def read_dependencies_dot_file():
+    data = {}
+    
+    with open(RECIPE_DEPNDS_FILE, "r") as f:
+        lines = f.readlines()
+
+        for line in lines:
+            if "label=" in line:
+                d = parse_info_line(line)
+                name = d["pkgname"]
+                data[name] = d
+                
+    return data
+
+def set_layer_info(pkglist, layers):
+
+    for name in pkglist:
+        pkg = pkglist[name]
+
+        for layer in layers:
+            layer_path = layers[layer]["path"]
+            
+            if pkg["bbpath"].startswith(layer_path):
+                pkg["layer"] = layer
+        
+def find_packages_not_built_from_debian(packages, base_workdir):
     cmd = ["find", base_workdir, "-maxdepth", "2", "-type", "d"]
     
     result = run_cmd(cmd)
@@ -34,19 +103,13 @@ def find_packages_not_built_from_debian(packages, licenses, base_workdir):
         
         package_dir = package_dir.strip()
         pkgname = os.path.basename(package_dir)
-        actual_pkgname = pkgname
-        if pkgname.endswith("-native"):
-            pkgname = pkgname.strip("-native")
 
-        if actual_pkgname in packages.keys():
-            if actual_pkgname in licenses:
-                lic = licenses[actual_pkgname]
-
-                cmd = ["find", package_dir, "-maxdepth", "2", "-name", "*.dsc"]
-                dsc_result = run_cmd(cmd)
-
-                if len(dsc_result["lines"]) is 0:
-                    result[actual_pkgname] = packages[actual_pkgname]
+        if pkgname in packages.keys():
+            cmd = ["find", package_dir, "-maxdepth", "2", "-name", "*.dsc"]
+            dsc_result = run_cmd(cmd)
+            
+            if len(dsc_result["lines"]) is 0:
+                result[pkgname] = packages[pkgname]
                 
     return result
                 
@@ -92,9 +155,12 @@ def get_layers():
         
     for line in lines:
         tmp = line.strip().split()
+        layer_path = tmp[1]
+        if not layer_path.endswith("/"):
+            layer_path = "%s/" % layer_path
         layer = {
             "name": tmp[0],
-            "path": tmp[1],
+            "path": layer_path,
             "prio": int(tmp[2])
         }
 
@@ -102,157 +168,24 @@ def get_layers():
 
     return layers
 
-def get_recipes():
-    cmd = ["bitbake-layers", "show-recipes"]
-
-    recipes = {}
-
-    result = run_cmd(cmd)
-
-    lines = result["lines"]
-    length = len(lines)
-
-    # skip headers
-    i = 0
-    while True:
-        if i >= length:
-            break
-        if lines[i].strip().endswith(':'):
-            break
-        i += 1
-        
-    for n in range(i):
-        lines.pop(0)
-
-    length = len(lines)        
-    i = 0
-    while True:
-        if i >= length:
-            break
-        
-        recipe = {}
-        line = lines[i].strip()
-        if line.endswith(':'):
-            recipe["name"] =  line[0:len(line) - 1].strip()
-
-            layers = {}
-            
-            i += 1
-            while True:
-                if i >= length:
-                    break
-
-                line = lines[i].strip()
-                if line.endswith(':'):
-                    break
-
-                info = line.split(' ')
-
-                layer = info[0]
-                version = info[len(info) - 1]
-                layer_info = {
-                    "layer": layer,
-                    "version": version
-                }
-
-                layers[layer] = layer_info
-                i += 1
-
-            recipe["layers"] = layers
-            recipes[recipe["name"]] = recipe
-            
-    return recipes
-
-def get_packages_in_rootfs(license_dir):
+def get_packages_from_manifest(manifestfile):
     packages = []
-    path = "%s/license.manifest" % license_dir
 
-    with open(path, "r") as f:
+    with open(manifestfile, "r") as f:
         lines = f.readlines()
 
         for line in lines:
-            if line.startswith("PACKAGE NAME:"):
-                name = line.strip().split(':')[1].strip()
-                packages.append(name)
+            packages.append(line.split(' ')[0].strip())
 
     return packages
 
-def read_all_package_licenses(license_dir):
-    licenses = {}
-    
-    for root, dirs, files in os.walk(license_dir):
-        for dir in dirs:
-            recipeinfo = "%s/%s/recipeinfo" % (license_dir, dir)
-            if os.path.exists(recipeinfo):
-                with open(recipeinfo, "r") as f:
-                    lines = f.readlines()
-
-                    lic_info = {
-                        "name": dir,
-                        "pkg_license": lines[0].split(':')[1].strip(),
-                        "pr": lines[1].split(':')[1].strip(),
-                        "version": lines[2].split(':')[1].strip(),
-                    }
-
-                    licenses[lic_info["name"]] = lic_info
-
-    return licenses
-
-def set_package_recipe(licenses, recipes):
-    for k in licenses.keys():
-        name = k
-
-        if not name in recipes:
-            # check without -native suffix. e.g. nss-native to nss
-            if name.endswith("-native"):
-                tmpname = name[0:len(name) - 7]
-
-            if tmpname in recipes:
-                name = tmpname
-            else:
-                print("[*] %s is not in recipe" % name, file=sys.stderr)
-                continue
-        
-        licenses[k]["recipe"] = recipes[name]["name"]
-        
-def merge_data(layers, recipes, licenses):
-    data = {}
-
-    for pkg in licenses.keys():
-        lic_info = licenses[pkg]
-        pkg_name = lic_info["name"]
-        recipe_name = lic_info["recipe"]
-
-        # get recipe for the package
-        recipe = recipes[recipe_name]
-
-        prev = None
-        layer = None
-        # get layer for the package
-        for l in recipe["layers"]:
-            if prev is None:
-                layer = layers[l]
-            else:
-                tmp = layers[l]
-
-                if tmp["prio"] > prev["prio"]:
-                    layer = tmp
-
-            prev = layers[l]
-
-        data[pkg_name] = {
-            "pkg_name": pkg_name,
-            "recipe_name": recipe_name,
-            "layer": layer["name"],
-            "version": lic_info["version"],
-            "license": lic_info["pkg_license"]
-        }
-
-    return data
 
 def show_no_data():
     print("All packages are built from debian source!")
 
+def print_data(pkgname, layer, version, bbpath):
+    print("%s\t%s\t%s\t%s" % (pkgname.ljust(60), layer.ljust(20), version.ljust(30), bbpath.ljust(120)))
+    
 def show_result(data):
     if len(data) == 0:
         show_no_data()
@@ -260,37 +193,55 @@ def show_result(data):
     
     print("==== Packages not built from debian source ====")
 
-    print("%s\t%s\t%s\t%s\t%s" % ("package name".ljust(30), "layer".ljust(20), "recipe name".ljust(30), "version".ljust(10), "license".ljust(20)))
+    print_data("package name", "layer", "version", "bbfile path")
     for k in data.keys():
         d = data[k]
-        print("%s\t%s\t%s\t%s\t%s" % (d["pkg_name"].ljust(30), d["layer"].ljust(20), d["recipe_name"].ljust(30), d["version"].ljust(10), d["license"].ljust(20)))
+        print_data(d["pkgname"], d["layer"], d["version"], d["bbpath"])
 
     return 1
 
-def show_version():
-    print("%s version 0.1" % os.path.basename(sys.argv[0]))
-    exit(0)
-
-def license_dir_exists(path):
-    if path is None:
-        return False
-    
-    return os.path.exists(path)
-
 def parse_arguments():
-    parser = OptionParser()
+    usage = "usage: %prog [options] target"
+    
+    parser = OptionParser(usage=usage)
 
-    parser.add_option("-r", "--rootfs", dest="rootfs",
-                       help="path to image directory(e.g. $BASE_WORKDIR/tmp/deploy/licenses/core-image-minimal-qemuarm64-20190507062402)",
-                       metavar="ROOTFS", default=None)
+    parser.add_option("-s", "--sdk", dest="sdkflag",
+                      help="check sdk", action="store_true", default=False)
+
+    parser.add_option("-m", "--manifest", dest="manifest",
+                       help="path to manifestfile for image, target sdk, host sdk(e.g. $BASE_WORKDIR/tmp/deploy/images/qemuarm64/core-image-minimal-qemuarm64.manifest, $BASE_WORKDIR/tmp/deploy/sdk/emlinux-glibc-x86_64-core-image-minimal-aarch64-toolchain-2.0.target.manifest)",
+                       metavar="MANIFEST", default=None)
 
     (options, args) = parser.parse_args()
 
+    if not len(args) == 1:
+        print("must specify target", file=sys.stderr)
+        print("target is bitbake target such as core-image-minimal")
+        exit(1)
+
     return {
-        "rootfs": options.rootfs,
+        "sdkflag": options.sdkflag,        
+        "manifest": options.manifest,
+        "target": args[0],
     }
 
+def sort_package_data(packages):
+    sorted_packages = {}
+    for k, v in sorted(packages.items(), key=lambda x: x[0]):
+        sorted_packages[k] = v
+
+    return sorted_packages
+
+def cleanup_all():
+    dot_files = [ RECIPE_DEPNDS_FILE, "./pn-buildlist", "./task-depends.dot"]
+
+    for f in dot_files:
+        if os.path.exists(f):
+            os.unlink(f)
+            
 if __name__ == "__main__":
+    atexit.register(cleanup_all)
+    
     args = parse_arguments()
 
     has_bitbake()
@@ -298,33 +249,25 @@ if __name__ == "__main__":
     bitbake_envs = get_bitbake_envs()
     
     layers = get_layers()
-    recipes = get_recipes()
-
-    license_dir = "%s/deploy/licenses" % bitbake_envs["TMPDIR"]
-
-    licenses = read_all_package_licenses(license_dir)
-    set_package_recipe(licenses, recipes)
-
-    all_packages = merge_data(layers, recipes, licenses)
+    
     packages = None
 
-    if not args["rootfs"]:
-        packages = all_packages
+    if not create_dependencies_files(args["target"], args["sdkflag"]):
+        print("failed to create %s file" % RECIPE_DEPNDS_FILE, file=sys.stderr)
+        exit(1)
+    
+    pkglist = read_dependencies_dot_file()
+
+    set_layer_info(pkglist, layers)
+    
+    if not args["manifest"]:
+        packages = pkglist
     else:
-        rootfs_packages = get_packages_in_rootfs(args["rootfs"])
-        packages = {}
-        for k in all_packages:
-            pkgname = all_packages[k]["pkg_name"]
-            if pkgname in rootfs_packages:
-                packages[k] = all_packages[k]
+        target_packages = get_packages_from_manifest(args["manifest"])
+        packages = remove_packages_not_in_manifest(pkglist, target_packages)
 
+    packages = find_packages_not_built_from_debian(packages, bitbake_envs["BASE_WORKDIR"])
 
-    packages = find_packages_not_built_from_debian(packages, licenses, bitbake_envs["BASE_WORKDIR"])
-
-    r = 0
-    sorted_packages = {}
-    for k, v in sorted(packages.items(), key=lambda x: x[0]):
-        sorted_packages[k] = v
-    r = show_result(sorted_packages)
-
+    r = show_result(sort_package_data(packages))
+    
     exit(r)

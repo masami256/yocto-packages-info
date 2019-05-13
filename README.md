@@ -6,7 +6,7 @@ see [LICENSE.txt](./LICENSE.txt)
 
 ## Purpose
 
-To get package information about layer, license, recipe, version.
+To get package information about layer, recipe, version.
 
 ## How to use
 
