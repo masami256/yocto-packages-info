@@ -91,7 +91,7 @@ def set_layer_info(pkglist, layers):
             if pkg["bbpath"].startswith(layer_path):
                 pkg["layer"] = layer
         
-def find_packages_not_built_from_debian(packages, base_workdir):
+def find_packages(packages, base_workdir):
     cmd = ["find", base_workdir, "-maxdepth", "2", "-type", "d"]
     
     result = run_cmd(cmd)
@@ -180,23 +180,20 @@ def get_packages_from_manifest(manifestfile):
     return packages
 
 
-def show_no_data():
-    print("All packages are built from debian source!")
-
-def print_data(pkgname, layer, version, bbpath):
-    print("%s\t%s\t%s\t%s" % (pkgname.ljust(60), layer.ljust(20), version.ljust(30), bbpath.ljust(120)))
+def print_data(pkgname, layer, version):
+    print("%s\t%s\t%s" % (pkgname.ljust(60), layer.ljust(20), version.ljust(30)))
     
 def show_result(data):
     if len(data) == 0:
-        show_no_data()
+        print("no data")
         return 0
     
-    print("==== Packages not built from debian source ====")
+    print("==== Packages ====")
 
-    print_data("package name", "layer", "version", "bbfile path")
+    print_data("package name", "layer", "version")
     for k in data.keys():
         d = data[k]
-        print_data(d["pkgname"], d["layer"], d["version"], d["bbpath"])
+        print_data(d["pkgname"], d["layer"], d["version"])
 
     return 1
 
@@ -266,7 +263,7 @@ if __name__ == "__main__":
         target_packages = get_packages_from_manifest(args["manifest"])
         packages = remove_packages_not_in_manifest(pkglist, target_packages)
 
-    packages = find_packages_not_built_from_debian(packages, bitbake_envs["BASE_WORKDIR"])
+    packages = find_packages(packages, bitbake_envs["BASE_WORKDIR"])
 
     r = show_result(sort_package_data(packages))
     
