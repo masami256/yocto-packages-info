@@ -181,7 +181,7 @@ def get_packages_from_manifest(manifestfile):
 
 
 def print_data(pkgname, layer, version):
-    print("%s\t%s\t%s" % (pkgname.ljust(60), layer.ljust(20), version.ljust(30)))
+    print("%s\t%s\t%s" % (pkgname.ljust(30), layer.ljust(15), version.ljust(15)))
     
 def show_result(data):
     if len(data) == 0:
